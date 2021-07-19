@@ -566,3 +566,79 @@ func TestOutputIncludes(t *testing.T) {
 		})
 	}
 }
+
+// TestPluginCmds will test exact output but will also require other steps to properly
+// setup/cleanup so it was split into its own test.
+func TestPluginCmds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+	defer cancel()
+
+	testCases := []struct {
+		desc       string
+		cmdLine    string
+		expectFile string
+		useDir     string
+		cleanup    bool
+	}{
+		{
+			desc:       "plugin list",
+			cmdLine:    "plugin list",
+			useDir:     "testdata/pluginTests",
+			expectFile: "testdata/plugin-list.golden",
+		}, {
+			desc:       "plugin show without ext",
+			cmdLine:    "plugin show hello-world",
+			useDir:     "testdata/pluginTests",
+			expectFile: "testdata/plugin-show-wo-ext.golden",
+		}, {
+			desc:       "plugin show with ext",
+			cmdLine:    "plugin show hello-world.yaml",
+			useDir:     "testdata/pluginTests",
+			expectFile: "testdata/plugin-show-w-ext.golden",
+		}, {
+			desc: "plugin show not found",
+			// Set --level=panic to avoid timestamp in output.
+			cmdLine:    "plugin show no-plugin --level=panic",
+			useDir:     "testdata/pluginTests",
+			expectFile: "testdata/plugin-show-not-found.golden",
+		}, {
+			desc:       "plugin show second plugin",
+			cmdLine:    "plugin show hw-2",
+			useDir:     "testdata/pluginTests",
+			expectFile: "testdata/plugin-show-2.golden",
+		},
+	}
+
+	for _, tc := range testCases {
+		origval := os.Getenv("SONOBUOY_DIR")
+		defer os.Setenv("SONOBUOY_DIR", origval)
+
+		t.Run(tc.desc, func(t *testing.T) {
+			if tc.cleanup {
+				defer os.RemoveAll(tc.useDir)
+			}
+			os.Setenv("SONOBUOY_DIR", tc.useDir)
+
+			// Allow errors here since we also may test stderr
+			output, _ := runSonobuoyCommandWithContext(ctx, t, tc.cmdLine)
+
+			binaryVersion := mustRunSonobuoyCommand(t, "version --short")
+			binaryVer := strings.TrimSpace(binaryVersion.String())
+
+			outString := strings.ReplaceAll(output.String(), binaryVer, "*STATIC_FOR_TESTING*")
+			if *update {
+				if err := os.WriteFile(tc.expectFile, []byte(outString), 0666); err != nil {
+					t.Fatalf("Failed to update goldenfile: %v", err)
+				}
+			} else {
+				fileData, err := ioutil.ReadFile(tc.expectFile)
+				if err != nil {
+					t.Fatalf("Failed to read golden file %v: %v", tc.expectFile, err)
+				}
+				if diff := pretty.Compare(string(fileData), outString); diff != "" {
+					t.Errorf("Expected manifest to equal goldenfile: %v but got diff:\n\n%v", tc.expectFile, diff)
+				}
+			}
+		})
+	}
+}
