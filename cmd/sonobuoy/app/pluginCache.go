@@ -17,7 +17,6 @@ limitations under the License.
 package app
 
 import (
-	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -51,12 +50,7 @@ func NewCmdPlugin() *cobra.Command {
 		Use:   "list",
 		Short: "List all installed plugins",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			output, err := listInstalledPlugins(getPluginCacheLocation(cmd))
-			if err != nil {
-				return err
-			}
-			fmt.Println(output)
-			return nil
+			return listInstalledPlugins(getPluginCacheLocation(cmd))
 		},
 	}
 
@@ -65,13 +59,7 @@ func NewCmdPlugin() *cobra.Command {
 		Short: "Print the full definition of the named plugin file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println(args, filenameFromArg(args[0], ".yaml"))
-			output, err := showInstalledPlugin(getPluginCacheLocation(cmd), filenameFromArg(args[0], ".yaml"))
-			if err != nil {
-				return err
-			}
-			fmt.Println(output)
-			return nil
+			return showInstalledPlugin(getPluginCacheLocation(cmd), filenameFromArg(args[0], ".yaml"))
 		},
 	}
 
@@ -80,12 +68,7 @@ func NewCmdPlugin() *cobra.Command {
 		Short: "Install a new plugin",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			output, err := installPlugin(getPluginCacheLocation(cmd), filenameFromArg(args[0], ".yaml"), args[1])
-			if err != nil {
-				return err
-			}
-			fmt.Println(output)
-			return nil
+			return installPlugin(getPluginCacheLocation(cmd), filenameFromArg(args[0], ".yaml"), args[1])
 		},
 	}
 
@@ -124,20 +107,18 @@ func getPluginCacheLocation(cmd *cobra.Command) string {
 	return expandedPath
 }
 
-func listInstalledPlugins(installedDir string) (string, error) {
-	// load every yaml file as a [] manifest
-	// print file, plugin name, description, sourceURL
+func listInstalledPlugins(installedDir string) error {
 	pluginFiles, err := LoadPlugins(installedDir)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to load installed plugins")
+		return errors.Wrap(err, "failed to load installed plugins")
 	}
 
-	var b bytes.Buffer
 	for filename, p := range pluginFiles {
-		fmt.Fprintf(&b, "filename: %v\nplugin name: %v\nsource URL: %v\ndescription: %v\n\n",
+		fmt.Printf("filename: %v\nplugin name: %v\nsource URL: %v\ndescription: %v\n\n",
 			filename, p.SonobuoyConfig.PluginName, p.SonobuoyConfig.SourceURL, p.SonobuoyConfig.Description)
 	}
-	return b.String(), nil
+
+	return nil
 }
 
 // LoadPlugins loads all plugins from the given directory (recursively) and
@@ -149,7 +130,6 @@ func LoadPlugins(installedDir string) (map[string]*manifest.Manifest, error) {
 
 	err := filepath.Walk(installedDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
-			fmt.Printf("schnake %+v", err)
 			return err
 		}
 		if !info.IsDir() && filepath.Ext(path) == ".yaml" {
@@ -169,7 +149,6 @@ func LoadPlugins(installedDir string) (map[string]*manifest.Manifest, error) {
 		logrus.Errorf("error walking the path %q: %v\n", installedDir, err)
 	}
 
-	// if any error, save error return error (means a single error will cause no output?)
 	return pluginMap, firstErr
 }
 
@@ -182,7 +161,7 @@ func LoadPlugin(installedDir, reqFile string) (*manifest.Manifest, error) {
 		if reqManifest != nil {
 			return nil
 		}
-		logrus.Info("path ", path, "\nreqFile ", reqFile, "\ninstalledDir", installedDir, "\njoinws", filepath.Join(installedDir, reqFile))
+
 		if !info.IsDir() && path == filepath.Join(installedDir, reqFile) {
 			m, err := loader.LoadDefinitionFromFile(path)
 			if err != nil {
@@ -215,40 +194,45 @@ func filenameFromArg(arg, extension string) string {
 
 // showInstalledPlugin returns the YAML of the plugin specified in the given file relative
 // to the given installation directory.
-func showInstalledPlugin(installedDir, reqPluginFile string) (string, error) {
+func showInstalledPlugin(installedDir, reqPluginFile string) error {
 	plugin, err := LoadPlugin(installedDir, reqPluginFile)
 	if err != nil {
-		return "", errors.Wrap(err, "failed to load installed plugins")
+		return errors.Wrap(err, "failed to load installed plugins")
 	}
 
 	yaml, err := kuberuntime.Encode(manifest.Encoder, plugin)
-	return string(yaml), errors.Wrap(err, "serializing as YAML")
+	if err != nil {
+		return errors.Wrap(err, "serializing as YAML")
+	}
+	fmt.Println(string(yaml))
+	return nil
 }
 
 // installPlugin will read the plugin at src (URL or file) then install it into the
 // installation directory with the given filename. If too many or too few plugins
 // are loaded, errors are returned. The returned string is a human-readable description
 // of the action taken.
-func installPlugin(installedDir, filename, src string) (string, error) {
+func installPlugin(installedDir, filename, src string) error {
 	newPath := filepath.Join(installedDir, filename)
 	var pl pluginList
 	if err := pl.Set(src); err != nil {
-		return "", err
+		return err
 	}
 
 	if len(pl.StaticPlugins) > 1 {
-		return "", fmt.Errorf("may only install one plugin at a time, found %v", len(pl.StaticPlugins))
+		return fmt.Errorf("may only install one plugin at a time, found %v", len(pl.StaticPlugins))
 	}
 	if len(pl.StaticPlugins) < 1 {
-		return "", fmt.Errorf("expected 1 plugin, found %v", len(pl.StaticPlugins))
+		return fmt.Errorf("expected 1 plugin, found %v", len(pl.StaticPlugins))
 	}
 
 	yaml, err := kuberuntime.Encode(manifest.Encoder, pl.StaticPlugins[0])
 	if err != nil {
-		return "", errors.Wrap(err, "failed to encode plugin")
+		return errors.Wrap(err, "failed to encode plugin")
 	}
 	if err := os.WriteFile(newPath, yaml, 0666); err != nil {
-		return "", err
+		return err
 	}
-	return fmt.Sprintf("Installed plugin %v into file %v from source %v", pl.StaticPlugins[0].Spec.Name, newPath, src), nil
+	fmt.Printf("Installed plugin %v into file %v from source %v\n", pl.StaticPlugins[0].Spec.Name, newPath, src)
+	return nil
 }
