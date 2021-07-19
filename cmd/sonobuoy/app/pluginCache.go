@@ -55,7 +55,7 @@ func NewCmdPlugin() *cobra.Command {
 	}
 
 	showCmd := &cobra.Command{
-		Use:   "show",
+		Use:   "show <plugin>",
 		Short: "Print the full definition of the named plugin file",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -64,7 +64,7 @@ func NewCmdPlugin() *cobra.Command {
 	}
 
 	installCmd := &cobra.Command{
-		Use:   "install",
+		Use:   "install <save-as-filename> <source filename or URL>",
 		Short: "Install a new plugin",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -83,12 +83,7 @@ func NewCmdPlugin() *cobra.Command {
 func getPluginCacheLocation(cmd *cobra.Command) string {
 	usePath := os.Getenv(SonobuoyDirEnvKey)
 	if len(usePath) == 0 {
-		var err error
-		usePath, err = homedir.Expand(defaultSonobuoyDir)
-		if err != nil {
-			logrus.Errorf("failed to expand default sonobuoy directory: %v", err)
-			return ""
-		}
+		usePath = defaultSonobuoyDir
 	}
 	expandedPath, err := homedir.Expand(usePath)
 	if err != nil {
@@ -108,23 +103,29 @@ func getPluginCacheLocation(cmd *cobra.Command) string {
 }
 
 func listInstalledPlugins(installedDir string) error {
-	pluginFiles, err := LoadPlugins(installedDir)
+	pluginFiles, err := loadPlugins(installedDir)
 	if err != nil {
 		return errors.Wrap(err, "failed to load installed plugins")
 	}
 
+	prefix := ""
+	first := true
 	for filename, p := range pluginFiles {
-		fmt.Printf("filename: %v\nplugin name: %v\nsource URL: %v\ndescription: %v\n\n",
-			filename, p.SonobuoyConfig.PluginName, p.SonobuoyConfig.SourceURL, p.SonobuoyConfig.Description)
+		if !first {
+			prefix = "---\n"
+		}
+		fmt.Printf("%vfilename: %v\nplugin name: %v\nsource URL: %v\ndescription: %v\n",
+			prefix, filename, p.SonobuoyConfig.PluginName, p.SonobuoyConfig.SourceURL, p.SonobuoyConfig.Description)
+		first = false
 	}
 
 	return nil
 }
 
-// LoadPlugins loads all plugins from the given directory (recursively) and
+// loadPlugins loads all plugins from the given directory (recursively) and
 // returns a map of their filename and contents. Returns the first error encountered
 // but continues to load and return as many plugins as possible.
-func LoadPlugins(installedDir string) (map[string]*manifest.Manifest, error) {
+func loadPlugins(installedDir string) (map[string]*manifest.Manifest, error) {
 	pluginMap := map[string]*manifest.Manifest{}
 	var firstErr error
 
@@ -152,7 +153,7 @@ func LoadPlugins(installedDir string) (map[string]*manifest.Manifest, error) {
 	return pluginMap, firstErr
 }
 
-func LoadPlugin(installedDir, reqFile string) (*manifest.Manifest, error) {
+func loadPlugin(installedDir, reqFile string) (*manifest.Manifest, error) {
 	var reqManifest *manifest.Manifest
 	err := filepath.Walk(installedDir, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
@@ -195,7 +196,7 @@ func filenameFromArg(arg, extension string) string {
 // showInstalledPlugin returns the YAML of the plugin specified in the given file relative
 // to the given installation directory.
 func showInstalledPlugin(installedDir, reqPluginFile string) error {
-	plugin, err := LoadPlugin(installedDir, reqPluginFile)
+	plugin, err := loadPlugin(installedDir, reqPluginFile)
 	if err != nil {
 		return errors.Wrap(err, "failed to load installed plugins")
 	}
